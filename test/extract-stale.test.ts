@@ -209,6 +209,24 @@ describe('gbrain extract --stale', () => {
     expect(usRows[0]?.eq).toBe(true);
   });
 
+  test('CRITICAL: pre-version extracted pages clear after --stale', async () => {
+    await engine.putPage('people/alice', personPage('Alice'));
+    await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) advises [Acme](companies/acme).'));
+    await engine.executeRaw(
+      `UPDATE pages
+         SET updated_at = '2026-05-28T10:33:50.017Z',
+             links_extracted_at = '2026-05-28T10:33:50.017Z'`,
+    );
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(2);
+
+    await runExtract(engine, ['--stale']);
+
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(0);
+    const stamp = await stampOf('companies/acme');
+    expect(stamp).not.toBeNull();
+    expect(Date.parse(stamp!)).toBeGreaterThanOrEqual(Date.parse(LINK_EXTRACTOR_VERSION_TS));
+  });
+
   test('CDX-4 (D2): a link-flush throw aborts the sweep and leaves pages UNSTAMPED', async () => {
     await engine.putPage('people/alice', personPage('Alice'));
     await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) founded [Acme](companies/acme).'));
