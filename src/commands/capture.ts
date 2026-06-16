@@ -232,15 +232,73 @@ export function maybeRewriteSourceFkError(err: unknown, sourceId: string | undef
 }
 
 /**
- * Derive a title from the first non-empty, non-`---` line of the body,
- * stripping leading markdown heading marks, capped at 80 chars.
+ * Derive a readable title from the first non-empty, non-`---` line of the body.
+ * Prefer a complete first sentence and make any last-resort truncation explicit.
  * Falls back to 'Capture' when no usable line exists.
  */
+const MAX_DERIVED_TITLE_CHARS = 240;
+
+function trimAtWordBoundary(text: string, maxLength: number): string {
+  const clean = text.trim().replace(/\s+/g, ' ');
+  if (clean.length <= maxLength) return clean;
+  const suffix = '…';
+  const limit = Math.max(1, maxLength - suffix.length);
+  let cut = clean.slice(0, limit).trimEnd();
+  const boundary = Math.max(cut.lastIndexOf(' '), cut.lastIndexOf('-'), cut.lastIndexOf('/'));
+  if (boundary >= 0) {
+    cut = cut.slice(0, boundary).replace(/[\s\-/]+$/g, '');
+  } else {
+    cut = cut.replace(/[\s\-/]+$/g, '');
+  }
+  return `${cut || clean.slice(0, limit).trim()}${suffix}`;
+}
+
+const ABBREVIATION_TOKENS = new Set([
+  'e.g.',
+  'i.e.',
+  'etc.',
+  'vs.',
+  'mr.',
+  'mrs.',
+  'ms.',
+  'dr.',
+  'prof.',
+  'sr.',
+  'jr.',
+  'st.',
+  'inc.',
+  'ltd.',
+  'co.',
+  'u.s.',
+  'u.k.',
+]);
+
+function isAbbreviationBoundary(title: string, endIndex: number): boolean {
+  const prefix = title.slice(0, endIndex).trim();
+  if (!prefix) return false;
+  const token = prefix.split(/\s+/).at(-1)?.toLowerCase() ?? '';
+  return ABBREVIATION_TOKENS.has(token) || /^(?:[a-z]\.){2,}$/.test(token);
+}
+
+function firstCompleteSentenceOrSummary(line: string, maxLength = MAX_DERIVED_TITLE_CHARS): string {
+  const title = line.trim().replace(/\s+/g, ' ');
+  const sentenceMatches = title.matchAll(/[.!?](?:\s|$)/g);
+  for (const match of sentenceMatches) {
+    const endIndex = (match.index ?? 0) + 1;
+    if (isAbbreviationBoundary(title, endIndex)) continue;
+    const sentence = title.slice(0, endIndex).trim();
+    if (sentence.length <= maxLength) return sentence;
+  }
+  if (title.length <= maxLength) return title;
+  return trimAtWordBoundary(title, maxLength);
+}
+
 function deriveTitle(rawBody: string): string {
   const firstLine = rawBody
     .split('\n')
     .find((l) => l.trim().length > 0 && l.trim() !== '---') ?? '';
-  return firstLine.replace(/^#+\s*/, '').slice(0, 80) || 'Capture';
+  const clean = firstLine.replace(/^#+\s*/, '').trim();
+  return firstCompleteSentenceOrSummary(clean) || 'Capture';
 }
 
 /**

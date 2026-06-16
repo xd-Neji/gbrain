@@ -136,12 +136,33 @@ describe('capture — buildContent', () => {
     expect(parsed.data.title).toBe('Real first line');
   });
 
-  test('caps title at 80 chars', () => {
-    const longLine = 'x'.repeat(200);
+  test('uses complete first sentence instead of cutting at 80 chars', () => {
+    const line = 'Before responding to any user message, run at least one tool call to verify live state — do not trust memory or make assumptions. This prevents stale claims.';
+    const result = __testing.buildContent(line, {});
+    const parsed = matter(result);
+    expect(parsed.data.title).toBe('Before responding to any user message, run at least one tool call to verify live state — do not trust memory or make assumptions.');
+  });
+
+  test('does not split derived titles at common abbreviations', () => {
+    const line = 'The implementation follows e.g. provider fallback paths and direct capture paths without cutting abbreviations. This second sentence is not needed.';
+    const result = __testing.buildContent(line, {});
+    const parsed = matter(result);
+    expect(parsed.data.title).toBe('The implementation follows e.g. provider fallback paths and direct capture paths without cutting abbreviations.');
+  });
+
+  test('accepts short complete first sentence as derived title', () => {
+    const result = __testing.buildContent('Use Docker. This longer explanation should not replace the short complete sentence.', {});
+    const parsed = matter(result);
+    expect(parsed.data.title).toBe('Use Docker.');
+  });
+
+  test('makes fallback title truncation explicit for overlong single-token lines', () => {
+    const longLine = 'x'.repeat(300);
     const result = __testing.buildContent(longLine, {});
     const parsed = matter(result);
     expect(typeof parsed.data.title).toBe('string');
-    expect((parsed.data.title as string).length).toBeLessThanOrEqual(80);
+    expect((parsed.data.title as string).endsWith('…')).toBe(true);
+    expect((parsed.data.title as string).length).toBeLessThanOrEqual(240);
   });
 
   test('honors --source via captured_via', () => {

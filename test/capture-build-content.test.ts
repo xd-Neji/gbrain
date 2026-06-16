@@ -190,9 +190,12 @@ describe('deriveTitle (no-frontmatter path)', () => {
     expect(deriveTitle('### Triple hash\nrest')).toBe('Triple hash');
   });
 
-  test('caps at 80 chars', () => {
-    const long = 'a'.repeat(120);
-    expect(deriveTitle(long)).toBe('a'.repeat(80));
+  test('caps at 240 chars with ellipsis', () => {
+    const long = 'a'.repeat(300);
+    const result = deriveTitle(long);
+    expect(result.length).toBe(240);
+    expect(result.endsWith('…')).toBe(true);
+    expect(result.slice(0, -1)).toBe('a'.repeat(239));
   });
 
   test('falls back to Capture for empty input', () => {
