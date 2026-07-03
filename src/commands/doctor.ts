@@ -5189,8 +5189,12 @@ export async function buildChecks(
   // 4. pgvector extension
   progress.heartbeat('pgvector');
   try {
-    const sql = db.getConnection();
-    const ext = await sql`SELECT extname FROM pg_extension WHERE extname = 'vector'`;
+    // Use the already-connected engine instead of the module singleton.
+    // PGLite CLI runs commonly use an instance engine; db.getConnection()
+    // may be unset even while `connection` above succeeded.
+    const ext = await engine.executeRaw<{ extname: string }>(
+      `SELECT extname FROM pg_extension WHERE extname = 'vector'`,
+    );
     if (ext.length > 0) {
       checks.push({ name: 'pgvector', status: 'ok', message: 'Extension installed' });
     } else {
@@ -5985,7 +5989,6 @@ export async function buildChecks(
   // repair target, per #254/Codex review).
   progress.heartbeat('jsonb_integrity');
   try {
-    const sql = db.getConnection();
     const targets: Array<{ table: string; col: string; expected: 'object' | 'array' }> = [
       { table: 'pages',         col: 'frontmatter',    expected: 'object' },
       { table: 'raw_data',      col: 'data',           expected: 'object' },
@@ -5997,10 +6000,10 @@ export async function buildChecks(
     const breakdown: string[] = [];
     for (const { table, col } of targets) {
       progress.heartbeat(`jsonb_integrity.${table}.${col}`);
-      const rows = await sql.unsafe(
+      const rows = await engine.executeRaw<{ n: string | number }>(
         `SELECT count(*)::int AS n FROM ${table} WHERE jsonb_typeof(${col}) = 'string'`,
       );
-      const n = Number((rows as any)[0]?.n ?? 0);
+      const n = Number(rows[0]?.n ?? 0);
       if (n > 0) { totalBad += n; breakdown.push(`${table}.${col}=${n}`); }
     }
     if (totalBad === 0) {
