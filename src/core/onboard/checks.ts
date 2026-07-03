@@ -322,8 +322,8 @@ export async function checkTakesCount(
   if (takesCount >= 100) {
     message = `${takesCount} takes (calibration ready)`;
   } else if (takesCount === 0) {
-    status = 'warn';
     if (bootstrapEnabled) {
+      status = 'warn';
       message = `0 takes (bootstrap eligible — gbrain takes extract --from-pages)`;
       remediations.push(makeRemediationStep({
         id: 'onboard.takes_bootstrap',
@@ -337,7 +337,7 @@ export async function checkTakesCount(
         status: 'remediable',
       }));
     } else {
-      message = '0 takes (takes.bootstrap_enabled is false; opt in to enable)';
+      message = '0 takes (takes bootstrap disabled; optional extraction not enabled)';
     }
   } else {
     message = `${takesCount} takes (calibration usable; >100 ideal)`;
