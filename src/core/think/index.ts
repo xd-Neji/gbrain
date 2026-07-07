@@ -19,7 +19,7 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import type { BrainEngine, SynthesisEvidenceInput } from '../engine.ts';
-import { runGather, renderPagesBlock, takesHitToTakeForPrompt } from './gather.ts';
+import { runGather, renderPagesBlock, renderFactsBlock, takesHitToTakeForPrompt } from './gather.ts';
 import { renderTakesBlock } from './sanitize.ts';
 import { buildThinkSystemPrompt, buildThinkUserMessage } from './prompt.ts';
 import { resolveCitations, type ParsedCitation } from './cite-render.ts';
@@ -127,6 +127,7 @@ export interface ThinkResult {
   gaps: string[];
   pagesGathered: number;
   takesGathered: number;
+  factsGathered: number;
   graphHits: number;
   modelUsed: string;
   rounds: number;
@@ -146,6 +147,7 @@ export interface ThinkResult {
     pagesFromHybrid: number;
     takesFromKeyword: number;
     takesFromVector: number;
+    factsFromVector: number;
     graphHits: number;
   };
 }
@@ -283,7 +285,13 @@ export async function runThink(
     ? `<anchor>${opts.anchor}</anchor>\nReachable: ${gather.graphSlugs.slice(0, 30).join(', ')}`
     : undefined;
 
-  // v0.36.1.0 (E1) — optional calibration profile retrieval. When enabled
+  // Render facts block from gather (sanitized + length-capped).
+  const { rendered: factsBlock, sanitizedCount: factsSanitized } = renderFactsBlock(gather.facts);
+  if (factsSanitized > 0) {
+    warnings.push(`SANITIZED_${factsSanitized}_FACT_CLAIMS`);
+  }
+
+  // v0.36.1.0 (E1) — optional calibration profile retrieval.
   // and a profile exists, inject it per D22 (after retrieval, before question).
   // When enabled and no profile, fall back to baseline + warn.
   let calibrationBlockOpts:
@@ -411,6 +419,7 @@ export async function runThink(
     question: opts.question,
     pagesBlock,
     takesBlock,
+    ...(factsBlock.length > 0 ? { factsBlock: factsBlock } : {}),
     ...(graphBlock !== undefined ? { graphBlock } : {}),
     ...(calibrationBlockOpts !== undefined ? { calibration: calibrationBlockOpts } : {}),
     ...(trajectoryBlock.length > 0 ? { trajectoryBlock } : {}),
@@ -448,6 +457,7 @@ export async function runThink(
         gaps: ['no LLM available; gather succeeded but synthesis skipped'],
         pagesGathered: gather.pages.length,
         takesGathered: gather.takes.length,
+        factsGathered: gather.facts.length,
         graphHits: gather.graphSlugs.length,
         modelUsed,
         rounds: 0,
@@ -457,6 +467,7 @@ export async function runThink(
           pagesFromHybrid: gather.diagnostics.pagesFromHybrid,
           takesFromKeyword: gather.diagnostics.takesFromKeyword,
           takesFromVector: gather.diagnostics.takesFromVector,
+          factsFromVector: gather.diagnostics.factsFromVector,
           graphHits: gather.diagnostics.graphHits,
         },
       };
@@ -504,6 +515,7 @@ export async function runThink(
     gaps: response.gaps,
     pagesGathered: gather.pages.length,
     takesGathered: gather.takes.length,
+    factsGathered: gather.facts.length,
     graphHits: gather.graphSlugs.length,
     modelUsed,
     rounds: 1,
@@ -515,6 +527,7 @@ export async function runThink(
       pagesFromHybrid: gather.diagnostics.pagesFromHybrid,
       takesFromKeyword: gather.diagnostics.takesFromKeyword,
       takesFromVector: gather.diagnostics.takesFromVector,
+      factsFromVector: gather.diagnostics.factsFromVector,
       graphHits: gather.diagnostics.graphHits,
     },
   };

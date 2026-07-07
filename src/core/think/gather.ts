@@ -1,24 +1,27 @@
 /**
  * v0.28: GATHER phase for `gbrain think`.
  *
- * Runs four retrievers in parallel:
+ * Runs five retrievers in parallel:
  *   1. hybrid    — page-grain hybrid search (vector + keyword + RRF)
  *   2. takes_kw  — keyword search across active takes
  *   3. takes_vec — vector search across active takes (skipped when no embedder)
  *   4. graph     — anchor-entity subgraph traversal (skipped when no --anchor)
+ *   5. facts_vec — vector search across world-visibility facts (skipped when no embedder)
  *
  * Each retriever returns a ranked list with normalized scores. We fuse them
  * via RRF (k=60, same constant as src/core/search/hybrid.ts). The final
  * merged set is capped at gather_limit and dedup'd by `(slug, row_num?)`.
  *
- * The page hits and take hits are returned as separate lists so the synth
- * step can render them into distinct <pages> / <takes> blocks for the prompt.
+ * The page hits, take hits, and fact hits are returned as separate lists so
+ * the synth step can render them into distinct <pages> / <takes> / <facts>
+ * blocks for the prompt.
  */
 
-import type { BrainEngine, TakeHit, Take } from '../engine.ts';
+import type { BrainEngine, TakeHit, Take, FactSearchHit } from '../engine.ts';
 import { hybridSearch } from '../search/hybrid.ts';
 import type { SearchResult } from '../types.ts';
 import { sanitizeQueryForPrompt } from '../search/expansion.ts';
+import { sanitizeFactForPrompt } from './sanitize.ts';
 
 export interface ThinkGatherOpts {
   question: string;
@@ -28,6 +31,8 @@ export interface ThinkGatherOpts {
   gatherLimit?: number;
   /** Soft cap on take results. Default 30. */
   takesLimit?: number;
+  /** Soft cap on fact results. Default 20. */
+  factsLimit?: number;
   /** Graph traversal depth when anchor is set. Default 2. */
   graphDepth?: number;
   /** Optional pre-computed embedding for the question. Lets the caller share embedding cost. */
@@ -36,11 +41,16 @@ export interface ThinkGatherOpts {
   takesHoldersAllowList?: string[];
 }
 
+/** A structured fact hit from the facts vector stream. Re-exports the engine type. */
+export type FactHit = FactSearchHit;
+
 export interface ThinkGatherResult {
   /** Page hits, ranked by RRF-fused score. */
   pages: SearchResult[];
   /** Take hits, ranked + dedup'd. */
   takes: TakeHit[];
+  /** Fact hits, ranked by vector similarity. */
+  facts: FactHit[];
   /** Graph nodes — slugs reachable from anchor within graphDepth. Empty when no anchor. */
   graphSlugs: string[];
   /** Diagnostics for telemetry / `--explain` path (Lane D follow-up). */
@@ -48,6 +58,7 @@ export interface ThinkGatherResult {
     pagesFromHybrid: number;
     takesFromKeyword: number;
     takesFromVector: number;
+    factsFromVector: number;
     graphHits: number;
     questionSanitizedFor: 'expansion' | 'none';
   };
@@ -152,8 +163,20 @@ export async function runGather(
         })
     : Promise.resolve([] as string[]);
 
-  const [pages, takesKw, takesVec, graphSlugs] = await Promise.all([
-    pagesPromise, takesKwPromise, takesVecPromise, graphPromise,
+  // Stream 5: facts vector search (requires question embedding).
+  const factsLimit = opts.factsLimit ?? 20;
+  const factsPromise: Promise<FactHit[]> = opts.questionEmbedding
+    ? engine.searchFactsVector(opts.questionEmbedding, {
+        limit: factsLimit,
+        visibility: 'world',
+      }).catch((e) => {
+        process.stderr.write(`[think.gather] facts-vector stream failed: ${(e as Error).message}\n`);
+        return [] as FactHit[];
+      })
+    : Promise.resolve([] as FactHit[]);
+
+  const [pages, takesKw, takesVec, graphSlugs, facts] = await Promise.all([
+    pagesPromise, takesKwPromise, takesVecPromise, graphPromise, factsPromise,
   ]);
 
   // Fuse takes streams (keyword + vector). Key by (page_slug, row_num).
@@ -165,11 +188,13 @@ export async function runGather(
   return {
     pages: pages.slice(0, gatherLimit),
     takes: fusedTakes,
+    facts,
     graphSlugs,
     diagnostics: {
       pagesFromHybrid: pages.length,
       takesFromKeyword: takesKw.length,
       takesFromVector: takesVec.length,
+      factsFromVector: facts.length,
       graphHits: graphSlugs.length,
       questionSanitizedFor: sanitizedQuestion === opts.question ? 'none' : 'expansion',
     },
@@ -210,4 +235,26 @@ export function takesHitToTakeForPrompt(h: TakeHit | Take): {
     source: 'source' in t ? (t as Take).source : null,
     since_date: 'since_date' in t ? (t as Take).since_date : null,
   };
+}
+
+/**
+ * Render fact hits into an XML block for the think prompt.
+ * Each fact gets a <fact> tag with metadata attributes.
+ * Sanitizes fact text with sanitizeFactForPrompt (same defense as takes)
+ * and caps each fact to 500 chars to keep the prompt budget bounded.
+ */
+export function renderFactsBlock(facts: FactHit[]): { rendered: string; sanitizedCount: number } {
+  if (facts.length === 0) return { rendered: '', sanitizedCount: 0 };
+  const lines: string[] = [];
+  let sanitizedCount = 0;
+  for (let i = 0; i < facts.length; i++) {
+    const f = facts[i];
+    const { text, matched } = sanitizeFactForPrompt(f.fact);
+    if (matched.length > 0) sanitizedCount++;
+    const slug = f.entity_slug || f.source_markdown_slug || 'unknown';
+    lines.push(
+      `<fact id="${i + 1}" kind="${f.kind}" confidence="${f.confidence.toFixed(2)}" notability="${f.notability}" entity="${slug}">\n${text}\n</fact>`,
+    );
+  }
+  return { rendered: lines.join('\n\n'), sanitizedCount };
 }

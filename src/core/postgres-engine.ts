@@ -11,6 +11,7 @@ import type {
   TakesScorecard, TakesScorecardOpts, CalibrationBucket, CalibrationCurveOpts,
   FactRow, FactKind, FactVisibility, FactInsertStatus,
   NewFact, FactListOpts, FactsHealth,
+  FactSearchHit,
   SourceRow,
 } from './engine.ts';
 import { withRetry, BULK_RETRY_OPTS, resolveBulkRetryOpts, computeNextDelay, type BatchAuditSite } from './retry.ts';
@@ -4638,6 +4639,38 @@ export class PostgresEngine implements BrainEngine {
       LIMIT ${limit}
     `;
     return rows as unknown as TakeHit[];
+  }
+
+  async searchFactsVector(
+    embedding: Float32Array,
+    opts: SearchOpts & { visibility?: 'world' | 'private' } = {},
+  ): Promise<FactSearchHit[]> {
+    const sql = this.sql;
+    const limit = clampSearchLimit(opts.limit, 20, 100);
+    const visibility = opts.visibility ?? 'world';
+    // Facts embedding can be halfvec(N) or vector(N) depending on pgvector
+    // version. Use the same dynamic cast resolution as insertFacts so the
+    // query works on both column types without a hardcoded dimension.
+    const castSuffix = await this.resolveFactsEmbeddingCast();
+    const vec = toPgVectorLiteral(embedding);
+    const rows = await sql`
+      SELECT f.id AS fact_id,
+             f.fact,
+             f.kind,
+             COALESCE(f.confidence, 1.0)::real AS confidence,
+             COALESCE(f.notability, 'medium') AS notability,
+             f.entity_slug,
+             f.source_markdown_slug,
+             COALESCE(f.visibility, 'private') AS visibility,
+             (1 - (f.embedding <=> ${sql.unsafe(`'${vec}'${castSuffix}`)}))::real AS score
+      FROM facts f
+      WHERE f.embedding IS NOT NULL
+        AND f.expired_at IS NULL
+        AND f.visibility = ${visibility}
+      ORDER BY f.embedding <=> ${sql.unsafe(`'${vec}'${castSuffix}`)}
+      LIMIT ${limit}
+    `;
+    return rows as unknown as FactSearchHit[];
   }
 
   async getTakeEmbeddings(ids: number[]): Promise<Map<number, Float32Array>> {

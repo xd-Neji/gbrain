@@ -14,6 +14,7 @@ import type {
   TakesScorecard, TakesScorecardOpts, CalibrationBucket, CalibrationCurveOpts,
   FactRow, FactKind, FactVisibility, FactInsertStatus,
   NewFact, FactListOpts, FactsHealth,
+  FactSearchHit,
   SourceRow,
 } from './engine.ts';
 import { MAX_SEARCH_LIMIT, clampSearchLimit } from './engine.ts';
@@ -4625,6 +4626,34 @@ export class PGLiteEngine implements BrainEngine {
       [vec, opts.takesHoldersAllowList ?? null, limit]
     );
     return rows as unknown as TakeHit[];
+  }
+
+  async searchFactsVector(
+    embedding: Float32Array,
+    opts: { limit?: number; visibility?: 'world' | 'private' } = {},
+  ): Promise<FactSearchHit[]> {
+    const limit = clampSearchLimit(opts.limit, 20, 100);
+    const visibility = opts.visibility ?? 'world';
+    const vec = toPgVectorLiteral(embedding);
+    const { rows } = await this.db.query(
+      `SELECT f.id AS fact_id,
+              f.fact,
+              f.kind,
+              COALESCE(f.confidence, 1.0)::real AS confidence,
+              COALESCE(f.notability, 'medium') AS notability,
+              f.entity_slug,
+              f.source_markdown_slug,
+              COALESCE(f.visibility, 'private') AS visibility,
+              (1 - (f.embedding <=> $1::vector))::real AS score
+       FROM facts f
+       WHERE f.embedding IS NOT NULL
+         AND f.expired_at IS NULL
+         AND f.visibility = $2
+       ORDER BY f.embedding <=> $1::vector
+       LIMIT $3`,
+      [vec, visibility, limit],
+    );
+    return rows as unknown as FactSearchHit[];
   }
 
   async getTakeEmbeddings(ids: number[]): Promise<Map<number, Float32Array>> {

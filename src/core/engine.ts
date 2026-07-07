@@ -322,6 +322,19 @@ export interface TakeHit {
   score: number;            // search rank score (ts_rank for keyword, 1-cos_dist for vector)
 }
 
+/** Search result row from searchFactsVector. */
+export interface FactSearchHit {
+  fact_id: number;
+  fact: string;
+  kind: string;
+  confidence: number;
+  notability: string;
+  entity_slug: string | null;
+  source_markdown_slug: string | null;
+  visibility: string;
+  score: number;            // 1 - cosine distance
+}
+
 /** v0.28 stale-takes row (mirrors StaleChunkRow shape). Embedding column intentionally omitted. */
 export interface StaleTakeRow {
   take_id: number;
@@ -1483,6 +1496,20 @@ export interface BrainEngine {
     embedding: Float32Array,
     opts?: SearchOpts & { takesHoldersAllowList?: string[] },
   ): Promise<TakeHit[]>;
+
+  /**
+   * Vector search across active (non-expired) facts. Cosine distance against
+   * `embedding`. Returns world-visibility facts only — private facts stay out
+   * of the think prompt. Skipped (returns []) when no facts have embeddings.
+   *
+   * Follows the same engine-method pattern as searchTakesVector so the think
+   * gather pipeline doesn't touch DB internals directly. The engine handles
+   * the halfvec/vector cast resolution internally.
+   */
+  searchFactsVector(
+    embedding: Float32Array,
+    opts?: SearchOpts & { visibility?: 'world' | 'private' },
+  ): Promise<FactSearchHit[]>;
 
   /** Look up embeddings by take id (mirrors getEmbeddingsByChunkIds). */
   getTakeEmbeddings(ids: number[]): Promise<Map<number, Float32Array>>;

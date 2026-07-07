@@ -32,6 +32,10 @@ export const INJECTION_PATTERNS: Array<{ name: string; rx: RegExp; replacement: 
   { name: 'close-take',       rx: /<\s*\/\s*take\s*>/gi, replacement: '&lt;/take&gt;' },
   { name: 'open-system',      rx: /<\s*system\s*>/gi, replacement: '&lt;system&gt;' },
   { name: 'open-instructions', rx: /<\s*instructions?\s*>/gi, replacement: '&lt;instructions&gt;' },
+  // Fact tag injection — same defense as take/trajectory, for the <facts>
+  // wrapper used by renderFactsBlock in the think gather pipeline.
+  { name: 'close-fact',       rx: /<\s*\/\s*fact\s*>/gi, replacement: '&lt;/fact&gt;' },
+  { name: 'open-fact',        rx: /<\s*fact\b[^>]*>/gi, replacement: '&lt;fact&gt;' },
   // v0.40.2.0 — close + open coverage for the new <trajectory> wrapper used
   // by formatTrajectoryBlock. Extracted fact text can be attacker-controlled
   // (e.g. an LLM-extracted claim from a session containing `</trajectory>` to
@@ -71,6 +75,15 @@ export function sanitizeTakeForPrompt(claim: string): { text: string; matched: s
     matched.push('length-cap');
   }
   return { text, matched };
+}
+
+/**
+ * Sanitize a fact claim before embedding into a model prompt. Same pattern as
+ * sanitizeTakeForPrompt — fact text comes from LLM-extracted claims that could
+ * contain injection attempts. Returns cleaned text + matched patterns.
+ */
+export function sanitizeFactForPrompt(claim: string): { text: string; matched: string[] } {
+  return sanitizeTakeForPrompt(claim);
 }
 
 /**
