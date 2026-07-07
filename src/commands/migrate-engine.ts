@@ -107,6 +107,32 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
   await targetEngine.connect(targetConfig);
   await targetEngine.initSchema();
 
+  // Seed non-default source rows before page copy.
+  // initSchema creates the default row; multi-source brains with additional
+  // sources (e.g. hermes-memory) need those rows in the target before
+  // pages reference them via foreign key. This is idempotent via
+  // ON CONFLICT DO NOTHING so re-running a failed/resumed migration
+  // doesn't duplicate.
+  console.log('Seeding target source rows...');
+  const sourceSources = await sourceEngine.executeRaw<{
+    id: string; name: string; local_path: string | null;
+    last_commit: string | null; last_sync_at: string | null;
+    config: string;
+    chunker_version: string | null; archived: boolean;
+    contextual_retrieval_mode: string | null;
+    trust_frontmatter_overrides: boolean;
+    newest_content_at: string | null;
+    created_at: string;
+  }>('SELECT id, name, local_path, last_commit, last_sync_at, config, chunker_version, archived, contextual_retrieval_mode, trust_frontmatter_overrides, newest_content_at, created_at FROM sources');
+  for (const src of sourceSources) {
+    await targetEngine.executeRaw(
+      `INSERT INTO sources (id, name, local_path, last_commit, last_sync_at, config, chunker_version, archived, contextual_retrieval_mode, trust_frontmatter_overrides, newest_content_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::timestamptz,$12::timestamptz)
+       ON CONFLICT (id) DO NOTHING`,
+      [src.id, src.name, src.local_path, src.last_commit, src.last_sync_at, src.config, src.chunker_version, src.archived, src.contextual_retrieval_mode, src.trust_frontmatter_overrides, src.newest_content_at, src.created_at],
+    );
+  }
+
   // Check if target has data
   const targetStats = await targetEngine.getStats();
   if (targetStats.page_count > 0 && !opts.force) {
